@@ -9,7 +9,8 @@ load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # ✅ Initialize Firebase
-cred = credentials.Certificate("call-summarizer-54733-firebase-adminsdk-fbsvc-faf80737b3.json")
+firebase_creds = json.loads(os.getenv("Firebase_KEY"))
+cred = credentials.Certificate(firebase_creds)
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
