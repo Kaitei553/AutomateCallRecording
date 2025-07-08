@@ -16,6 +16,10 @@ firebase_admin.initialize_app(cred)
 db = firestore.client()
 
 app = Flask(__name__)
+@app.route("/", methods=["GET"])
+def home():
+    return "✅ AutomateCallRecording API is running."
+
 
 @app.route("/process", methods=["POST"])
 def process_audio():
