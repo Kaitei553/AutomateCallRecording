@@ -24,10 +24,10 @@ app = Flask(__name__)
 @app.route("/", methods=["GET"])
 def index():
     return '''
-        <h2>音声ファイルアップロード</h2>
+        <h2>Upload the Audio</h2>
         <form method="POST" action="/upload" enctype="multipart/form-data">
             <input type="file" name="audio" accept=".mp3" required>
-            <button type="submit">アップロード＆処理開始</button>
+            <button type="submit">Start Working on it</button>
         </form>
     '''
 
