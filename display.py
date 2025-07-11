@@ -14,7 +14,7 @@ from googleapiclient.discovery import build
 load_dotenv()
 
 # Notion & Google Calendar settings
-notion = Client(auth=os.getenv("NOTION_TOKEN"))
+notion = os.getenv("NOTION_TOKEN")
 notion_db_id = os.getenv("NOTION_DATABASE_ID")
 google_creds = json.loads(os.getenv("GOOGLE_CALENDAR_KEY"))
 
