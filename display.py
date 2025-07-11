@@ -179,13 +179,13 @@ def process_audio(filepath):
 
 @app.route("/records", methods=["GET"])
 def show_records():
-    html = "<h2>📋 通話記録まとめ</h2><ul>"
+    html = "<h2>📋 zoom meeting summary</h2><ul>"
     if not summaries:
-        html += "<li>まだ記録はありません。</li>"
+        html += "<li>no voice yet</li>"
     else:
         for title, date, summary, result in summaries[::-1]:
             html += f"<li><strong>{title}</strong>（{date}） - {result}<br><pre>{summary}</pre></li><hr>"
-    html += "</ul><a href='/'>← 戻る</a>"
+    html += "</ul><a href='/'>← back</a>"
     return html
 
 if __name__ == "__main__":
