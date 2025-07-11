@@ -1,5 +1,5 @@
 import openai
-from flask import Flask, request, render_template, redirect
+from flask import Flask, request, redirect
 from twilio.twiml.voice_response import VoiceResponse
 from dotenv import load_dotenv
 import os
@@ -11,16 +11,23 @@ from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-notion = os.getenv("NOTION_TOKEN")  # ← your secret Notion integration token
+load_dotenv()
+
+# Initialize APIs
+notion = os.getenv("NOTION_TOKEN")
 notion_db_id = os.getenv("NOTION_DATABASE_ID")
 google_creds = json.loads(os.getenv("GOOGLE_CALENDAR_KEY"))
-    
+
 creds = service_account.Credentials.from_service_account_info(
     google_creds,
     scopes=['https://www.googleapis.com/auth/calendar']
 )
 calendar_service = build("calendar", "v3", credentials=creds)
+
+# App setup
 app = Flask(__name__)
+summaries = []  # 📝 Store processed summaries
+
 @app.route("/", methods=["GET"])
 def index():
     return '''
@@ -29,6 +36,7 @@ def index():
             <input type="file" name="audio" accept=".mp3" required>
             <button type="submit">Start Working on it</button>
         </form>
+        <br><a href="/records">📋 View Summaries</a>
     '''
 
 @app.route("/upload", methods=["POST"])
@@ -39,22 +47,20 @@ def handle_upload():
 
     local_filename = "uploaded_audio.mp3"
     uploaded_file.save(local_filename)
-
     return process_audio(local_filename)
 
 def process_audio(filepath):
     try:
-        # ✅ Step 2: Whisperで文字起こし
+        # ✅ Step 1: Transcribe with Whisper
         with open(filepath, "rb") as audio:
             transcript = openai.audio.transcriptions.create(
                 model="whisper-1",
                 file=audio,
                 language="ja"
             )
-
         print("📝 Transcript:\n", transcript.text)
 
-        # ✅ Step 3: GPTで要約＆予定抽出
+        # ✅ Step 2: Summarize and extract schedule
         summary_prompt = f"""
         以下の通話を、相手の名前、お店の名前、そして電話先の業界を抽出して、三行でまとめてください。
 
@@ -84,7 +90,7 @@ def process_audio(filepath):
         response_content = summary_response.choices[0].message.content.strip()
         print("\n📋 Summary:\n", response_content)
 
-        # ✅ Step 4: Google Calendar登録（必要なら）
+        # ✅ Step 3: Google Calendar登録（必要なら）
         match = re.search(r'{[\s\S]*?}', response_content)
         if match:
             try:
@@ -107,7 +113,7 @@ def process_audio(filepath):
         else:
             print("📭 この通話には予定は含まれていません。")
 
-        # ✅ Step 5: Notionに保存
+        # ✅ Step 4: Notionに保存
         summary_lines = response_content.split("\n")
         summary_text = "\n".join(summary_lines[:3])
 
@@ -135,6 +141,7 @@ def process_audio(filepath):
 
         print(f"📌 アポインメント結果: {appointment_result}")
 
+        # Save to Notion
         notion.pages.create(
             parent={"database_id": notion_db_id},
             properties={
@@ -161,11 +168,27 @@ def process_audio(filepath):
             }
         )
         print("✅ Notion page created successfully.")
-        return "✅ 音声ファイルを処理し、Notionとカレンダーに保存しました。"
+
+        # ✅ Step 5: Save summary for web display
+        summaries.append((meeting_title, meeting_date, summary_text, appointment_result))
+        return redirect("/records")
 
     except Exception as e:
         print("❌ Error:", e)
         return f"❌ エラーが発生しました: {str(e)}"
+
+@app.route("/records", methods=["GET"])
+def show_records():
+    html = "<h2>📋 通話記録まとめ</h2><ul>"
+    if not summaries:
+        html += "<li>まだ記録はありません。</li>"
+    else:
+        for title, date, summary, result in summaries[::-1]:
+            html += f"<li><strong>{title}</strong>（{date}） - {result}<br><pre>{summary}</pre></li><hr>"
+    html += "</ul><a href='/'>← 戻る</a>"
+    return html
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))  # Render provides PORT; default to 5000 for local
+    port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
