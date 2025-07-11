@@ -14,7 +14,7 @@ from googleapiclient.discovery import build
 
 notion = os.getenv("NOTION_TOKEN")  # ← your secret Notion integration token
 notion_db_id = os.getenv("NOTION_DATABASE_ID")
-with open("tasksync-e7008-2d1c9476ee13.json") as f:
+with open("GOOGLE_CALENDAR_KEY") as f:
     google_creds = json.load(f)
     
 creds = service_account.Credentials.from_service_account_info(
