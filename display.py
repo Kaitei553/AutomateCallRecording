@@ -20,7 +20,7 @@ creds = service_account.Credentials.from_service_account_info(
     scopes=['https://www.googleapis.com/auth/calendar']
 )
 calendar_service = build("calendar", "v3", credentials=creds)
-
+app = Flask(__name__)
 @app.route("/", methods=["GET"])
 def index():
     return '''
