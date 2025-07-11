@@ -1,5 +1,4 @@
 import openai
-import firebase_admin
 from flask import Flask, request, render_template, redirect
 from twilio.twiml.voice_response import VoiceResponse
 from dotenv import load_dotenv
