@@ -55,8 +55,7 @@ def process_audio(filepath):
         with open(filepath, "rb") as audio:
             transcript = openai.audio.transcriptions.create(
                 model="whisper-1",
-                file=audio,
-                language="ja"
+                file=audio
             )
         print("📝 Transcript:\n", transcript.text)
 
