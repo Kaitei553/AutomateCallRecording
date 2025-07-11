@@ -1,87 +1,170 @@
-from flask import Flask, request, jsonify
 import openai
 import firebase_admin
-from firebase_admin import credentials, firestore
+from flask import Flask, request, render_template, redirect
+from twilio.twiml.voice_response import VoiceResponse
 from dotenv import load_dotenv
-import os, json
+import os
+import requests
+import json
+import re
+from notion_client import Client
+from datetime import datetime
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
-# ✅ Load environment variables
-load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
+notion = os.getenv("NOTION_TOKEN")  # ← your secret Notion integration token
+notion_db_id = os.getenv("NOTION_DATABASE_ID")
+with open("tasksync-e7008-2d1c9476ee13.json") as f:
+    google_creds = json.load(f)
+    
+creds = service_account.Credentials.from_service_account_info(
+    google_creds,
+    scopes=['https://www.googleapis.com/auth/calendar']
+)
+calendar_service = build("calendar", "v3", credentials=creds)
 
-# ✅ Initialize Firebase
-firebase_creds = json.loads(os.getenv("Firebase_KEY"))
-cred = credentials.Certificate(firebase_creds)
-firebase_admin.initialize_app(cred)
-db = firestore.client()
-
-app = Flask(__name__)
 @app.route("/", methods=["GET"])
-def home():
-    return "✅ AutomateCallRecording API is running."
+def index():
+    return '''
+        <h2>音声ファイルアップロード</h2>
+        <form method="POST" action="/upload" enctype="multipart/form-data">
+            <input type="file" name="audio" accept=".mp3" required>
+            <button type="submit">アップロード＆処理開始</button>
+        </form>
+    '''
 
+@app.route("/upload", methods=["POST"])
+def handle_upload():
+    uploaded_file = request.files.get("audio")
+    if not uploaded_file:
+        return "No file uploaded", 400
 
-@app.route("/process", methods=["POST"])
-def process_audio():
-    # ✅ Get uploaded file
-    file = request.files.get("file")
-    if not file:
-        return jsonify({"error": "No audio file uploaded"}), 400
+    local_filename = "uploaded_audio.mp3"
+    uploaded_file.save(local_filename)
 
-    # ✅ Transcribe
-    transcript = openai.audio.transcriptions.create(
-        model="whisper-1",
-        file=file,
-        language="ja"
-    )
+    return process_audio(local_filename)
 
-    # ✅ Summarize
-    summary_prompt = f"""
-    以下の通話内容を要約してください。お客様の要望・課題・対応内容を3行以内でまとめてください：
+def process_audio(filepath):
+    try:
+        # ✅ Step 2: Whisperで文字起こし
+        with open(filepath, "rb") as audio:
+            transcript = openai.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio,
+                language="ja"
+            )
 
-    {transcript.text}
-    """
-    summary_response = openai.chat.completions.create(
-        model="gpt-4",
-        messages=[
-            {"role": "system", "content": "あなたは日本のカスタマーサポート担当者です。"},
-            {"role": "user", "content": summary_prompt}
-        ]
-    )
-    summary = summary_response.choices[0].message.content.strip()
+        print("📝 Transcript:\n", transcript.text)
 
-    # ✅ Email
-    email_prompt = f"""
-    以下の要約に基づいて、お客様へのフォローアップメールを作成してください。
-    ビジネス敬語を使って、丁寧で簡潔な文章でお願いします。
+        # ✅ Step 3: GPTで要約＆予定抽出
+        summary_prompt = f"""
+        以下の通話を、相手の名前、お店の名前、そして電話先の業界を抽出して、三行でまとめてください。
 
-    要約:
-    {summary}
-    """
-    email_response = openai.chat.completions.create(
-        model="gpt-4",
-        messages=[
-            {"role": "system", "content": "あなたは丁寧な日本語メールを書くカスタマーサポート担当者です。"},
-            {"role": "user", "content": email_prompt}
-        ]
-    )
-    email_text = email_response.choices[0].message.content.strip()
+        さらに、この通話には日程に関する予定が含まれていますか？含まれていれば、以下の形式でJSONとして出力してください：
 
-    # ✅ Save to Firestore
-    doc_ref = db.collection("calls").add({
-        "transcript": transcript.text,
-        "summary": summary,
-        "email_draft": email_text,
-        "created_at": firestore.SERVER_TIMESTAMP
-    })
+        {{
+          "title": "会議の概要タイトル",
+          "start": "2025-07-09T14:00:00+09:00",
+          "end": "2025-07-09T15:00:00+09:00"
+        }}
 
-    return jsonify({
-        "doc_id": doc_ref[1].id,
-        "transcript": transcript.text,
-        "summary": summary,
-        "email_draft": email_text
-    })
+        もし予定が含まれていなければ、`"none"` とだけ返答してください。
+        もし予定が含まれていたら、アポインメント成功あので成功と、断られていたら失敗と最後に返答してください。
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+        以下、通話内容：
 
+        {transcript.text}
+        """
+
+        summary_response = openai.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "あなたはプロのアシスタントです。"},
+                {"role": "user", "content": summary_prompt}
+            ]
+        )
+        response_content = summary_response.choices[0].message.content.strip()
+        print("\n📋 Summary:\n", response_content)
+
+        # ✅ Step 4: Google Calendar登録（必要なら）
+        match = re.search(r'{[\s\S]*?}', response_content)
+        if match:
+            try:
+                calendar_data = json.loads(match.group())
+                event = {
+                    "summary": calendar_data["title"],
+                    "start": {
+                        "dateTime": calendar_data["start"],
+                        "timeZone": "Asia/Tokyo"
+                    },
+                    "end": {
+                        "dateTime": calendar_data["end"],
+                        "timeZone": "Asia/Tokyo"
+                    }
+                }
+                calendar_service.events().insert(calendarId="primary", body=event).execute()
+                print("📅 カレンダーイベントが作成されました！")
+            except Exception as e:
+                print("❌ イベント情報の解析に失敗しました:", e)
+        else:
+            print("📭 この通話には予定は含まれていません。")
+
+        # ✅ Step 5: Notionに保存
+        summary_lines = response_content.split("\n")
+        summary_text = "\n".join(summary_lines[:3])
+
+        if match:
+            calendar_data = json.loads(match.group())
+            meeting_title = calendar_data["title"]
+            meeting_date = calendar_data["start"].split("T")[0]
+            meeting_category = "Customer call"
+        else:
+            meeting_title = "会話記録"
+            meeting_date = datetime.now().strftime("%Y-%m-%d")
+            meeting_category = "Standup"
+
+        lines = [line.strip() for line in response_content.split("\n") if line.strip()]
+        if lines:
+            result_line = lines[-1]
+            if "成功" in result_line:
+                appointment_result = "成功"
+            elif "失敗" in result_line:
+                appointment_result = "失敗"
+            else:
+                appointment_result = "不明"
+        else:
+            appointment_result = "不明"
+
+        print(f"📌 アポインメント結果: {appointment_result}")
+
+        notion.pages.create(
+            parent={"database_id": notion_db_id},
+            properties={
+                "Consulting＆Interview": {
+                    "title": [
+                        {"text": {"content": meeting_title}}
+                    ]
+                },
+                "Date": {
+                    "date": {
+                        "start": meeting_date
+                    }
+                },
+                "Category": {
+                    "multi_select": [
+                        {"name": appointment_result}
+                    ]
+                },
+                "Summary": {
+                    "rich_text": [
+                        {"text": {"content": summary_text}}
+                    ]
+                }
+            }
+        )
+        print("✅ Notion page created successfully.")
+        return "✅ 音声ファイルを処理し、Notionとカレンダーに保存しました。"
+
+    except Exception as e:
+        print("❌ Error:", e)
+        return f"❌ エラーが発生しました: {str(e)}"
