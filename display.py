@@ -166,3 +166,5 @@ def process_audio(filepath):
     except Exception as e:
         print("❌ Error:", e)
         return f"❌ エラーが発生しました: {str(e)}"
+if __name__ == "__main__":
+    app.run(debug=True)
