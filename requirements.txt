@@ -1,4 +1,10 @@
-flask
-openai
-firebase-admin
-python-dotenv
+Flask==2.3.3
+openai==1.23.2
+requests==2.31.0
+python-dotenv==1.0.1
+notion-client==2.2.1
+google-api-python-client==2.126.0
+google-auth==2.29.0
+google-auth-httplib2==0.2.0
+google-auth-oauthlib==1.2.0
+twilio==8.10.0
