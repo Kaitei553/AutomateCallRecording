@@ -1,6 +1,5 @@
 import openai
 from flask import Flask, request, redirect
-from twilio.twiml.voice_response import VoiceResponse
 from dotenv import load_dotenv
 import os
 import requests
@@ -11,9 +10,10 @@ from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
+# Load .env
 load_dotenv()
 
-# Initialize APIs
+# Notion & Google Calendar settings
 notion = os.getenv("NOTION_TOKEN")
 notion_db_id = os.getenv("NOTION_DATABASE_ID")
 google_creds = json.loads(os.getenv("GOOGLE_CALENDAR_KEY"))
@@ -24,17 +24,23 @@ creds = service_account.Credentials.from_service_account_info(
 )
 calendar_service = build("calendar", "v3", credentials=creds)
 
-# App setup
+# Flask App setup
 app = Flask(__name__)
-summaries = []  # 📝 Store processed summaries
+summaries = []
+
+# 許可する拡張子
+ALLOWED_EXTENSIONS = {'mp3', 'm4a', 'wav', 'webm'}
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 @app.route("/", methods=["GET"])
 def index():
     return '''
-        <h2>Upload the Audio</h2>
+        <h2>Upload an Audio File</h2>
         <form method="POST" action="/upload" enctype="multipart/form-data">
-            <input type="file" name="audio" accept=".mp3" required>
-            <button type="submit">Start Working on it</button>
+            <input type="file" name="audio" accept=".mp3,.m4a,.wav,.webm" required>
+            <button type="submit">Start Processing</button>
         </form>
         <br><a href="/records">📋 View Summaries</a>
     '''
@@ -42,16 +48,16 @@ def index():
 @app.route("/upload", methods=["POST"])
 def handle_upload():
     uploaded_file = request.files.get("audio")
-    if not uploaded_file:
-        return "No file uploaded", 400
+    if not uploaded_file or not allowed_file(uploaded_file.filename):
+        return "❌ Unsupported file format", 400
 
-    local_filename = "uploaded_audio.mp3"
+    local_filename = "uploaded_audio." + uploaded_file.filename.rsplit('.', 1)[1].lower()
     uploaded_file.save(local_filename)
     return process_audio(local_filename)
 
 def process_audio(filepath):
     try:
-        # ✅ Step 1: Transcribe with Whisper
+        # Step 1: Whisper transcription
         with open(filepath, "rb") as audio:
             transcript = openai.audio.transcriptions.create(
                 model="whisper-1",
@@ -59,7 +65,7 @@ def process_audio(filepath):
             )
         print("📝 Transcript:\n", transcript.text)
 
-        # ✅ Step 2: Summarize and extract schedule
+        # Step 2: GPT summarization + calendar extraction
         summary_prompt = f"""
         以下の通話を、相手の名前、お店の名前、そして電話先の業界を抽出して、三行でまとめてください。
 
@@ -73,7 +79,6 @@ def process_audio(filepath):
 
         もし予定が含まれていなければ、`"none"` とだけ返答してください。
         もし予定が含まれていたら、アポインメント成功あので成功と、断られていたら失敗と最後に返答してください。
-        通話が中国語の時は中国語で返答を、日本語の時は日本語での返答をお願いします。
 
         以下、通話内容：
 
@@ -90,7 +95,7 @@ def process_audio(filepath):
         response_content = summary_response.choices[0].message.content.strip()
         print("\n📋 Summary:\n", response_content)
 
-        # ✅ Step 3: Google Calendar登録（必要なら）
+        # Step 3: Google Calendar registration if any
         match = re.search(r'{[\s\S]*?}', response_content)
         if match:
             try:
@@ -107,13 +112,13 @@ def process_audio(filepath):
                     }
                 }
                 calendar_service.events().insert(calendarId="primary", body=event).execute()
-                print("📅 カレンダーイベントが作成されました！")
+                print("📅 Googleカレンダーに追加されました")
             except Exception as e:
-                print("❌ イベント情報の解析に失敗しました:", e)
+                print("❌ JSONパースに失敗:", e)
         else:
-            print("📭 この通話には予定は含まれていません。")
+            print("📭 この通話には予定が含まれていません")
 
-        # ✅ Step 4: Notionに保存
+        # Step 4: Notion登録 + summary保存
         summary_lines = response_content.split("\n")
         summary_text = "\n".join(summary_lines[:3])
 
@@ -139,9 +144,6 @@ def process_audio(filepath):
         else:
             appointment_result = "不明"
 
-        print(f"📌 アポインメント結果: {appointment_result}")
-
-        # Save to Notion
         notion.pages.create(
             parent={"database_id": notion_db_id},
             properties={
@@ -167,9 +169,6 @@ def process_audio(filepath):
                 }
             }
         )
-        print("✅ Notion page created successfully.")
-
-        # ✅ Step 5: Save summary for web display
         summaries.append((meeting_title, meeting_date, summary_text, appointment_result))
         return redirect("/records")
 
@@ -179,9 +178,9 @@ def process_audio(filepath):
 
 @app.route("/records", methods=["GET"])
 def show_records():
-    html = "<h2>📋 zoom meeting summary</h2><ul>"
+    html = "<h2>📋 summary</h2><ul>"
     if not summaries:
-        html += "<li>no voice yet</li>"
+        html += "<li>no record。</li>"
     else:
         for title, date, summary, result in summaries[::-1]:
             html += f"<li><strong>{title}</strong>（{date}） - {result}<br><pre>{summary}</pre></li><hr>"
