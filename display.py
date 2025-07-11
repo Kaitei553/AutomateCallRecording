@@ -167,4 +167,5 @@ def process_audio(filepath):
         print("❌ Error:", e)
         return f"❌ エラーが発生しました: {str(e)}"
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))  # Render provides PORT; default to 5000 for local
+    app.run(host="0.0.0.0", port=port)
