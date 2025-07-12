@@ -5,24 +5,16 @@ import os
 import requests
 import json
 import re
-from notion_client import Client
 from datetime import datetime
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
+from notion_client import Client
 
 # Load .env
 load_dotenv()
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Notion & Google Calendar settings
-notion = os.getenv("NOTION_TOKEN")
+# Notion setup
+notion = Client(auth=os.getenv("NOTION_TOKEN"))
 notion_db_id = os.getenv("NOTION_DATABASE_ID")
-google_creds = json.loads(os.getenv("GOOGLE_CALENDAR_KEY"))
-
-creds = service_account.Credentials.from_service_account_info(
-    google_creds,
-    scopes=['https://www.googleapis.com/auth/calendar']
-)
-calendar_service = build("calendar", "v3", credentials=creds)
 
 # Flask App setup
 app = Flask(__name__)
@@ -65,7 +57,7 @@ def process_audio(filepath):
             )
         print("📝 Transcript:\n", transcript.text)
 
-        # Step 2: GPT summarization + calendar extraction
+        # Step 2: GPT summarization
         summary_prompt = f"""
         以下の通話を、相手の名前、お店の名前、そして電話先の業界を抽出して、三行でまとめてください。
 
@@ -95,43 +87,17 @@ def process_audio(filepath):
         response_content = summary_response.choices[0].message.content.strip()
         print("\n📋 Summary:\n", response_content)
 
-        # Step 3: Google Calendar registration if any
+        # Step 3: Extract meeting info if available
         match = re.search(r'{[\s\S]*?}', response_content)
-        if match:
-            try:
-                calendar_data = json.loads(match.group())
-                event = {
-                    "summary": calendar_data["title"],
-                    "start": {
-                        "dateTime": calendar_data["start"],
-                        "timeZone": "Asia/Tokyo"
-                    },
-                    "end": {
-                        "dateTime": calendar_data["end"],
-                        "timeZone": "Asia/Tokyo"
-                    }
-                }
-                calendar_service.events().insert(calendarId="primary", body=event).execute()
-                print("📅 Googleカレンダーに追加されました")
-            except Exception as e:
-                print("❌ JSONパースに失敗:", e)
-        else:
-            print("📭 この通話には予定が含まれていません")
-
-        # Step 4: Notion登録 + summary保存
-        summary_lines = response_content.split("\n")
-        summary_text = "\n".join(summary_lines[:3])
-
         if match:
             calendar_data = json.loads(match.group())
             meeting_title = calendar_data["title"]
             meeting_date = calendar_data["start"].split("T")[0]
-            meeting_category = "Customer call"
         else:
             meeting_title = "会話記録"
             meeting_date = datetime.now().strftime("%Y-%m-%d")
-            meeting_category = "Standup"
 
+        # Step 4: Determine appointment result
         lines = [line.strip() for line in response_content.split("\n") if line.strip()]
         if lines:
             result_line = lines[-1]
@@ -144,6 +110,9 @@ def process_audio(filepath):
         else:
             appointment_result = "不明"
 
+        summary_text = "\n".join(lines[:3])
+
+        # Step 5: Save to Notion
         notion.pages.create(
             parent={"database_id": notion_db_id},
             properties={
